@@ -26,6 +26,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/gateway/register", hub.HandleGatewayRegister)
+	mux.HandleFunc("/gateway/tunnel", hub.HandleGatewayTunnel)
 	mux.HandleFunc("/client/connect", hub.HandleClientConnect)
 	mux.HandleFunc("/client/reconnect", hub.HandleClientReconnect)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -35,10 +36,20 @@ func main() {
 
 	srv := &http.Server{Addr: ":" + port, Handler: mux}
 
+	tlsCert := os.Getenv("TLS_CERT")
+	tlsKey := os.Getenv("TLS_KEY")
+
 	go func() {
-		log.Printf("relay server listening on :%s", port)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+		if tlsCert != "" && tlsKey != "" {
+			log.Printf("relay server listening on :%s (TLS)", port)
+			if err := srv.ListenAndServeTLS(tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("listen TLS: %v", err)
+			}
+		} else {
+			log.Printf("relay server listening on :%s", port)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("listen: %v", err)
+			}
 		}
 	}()
 

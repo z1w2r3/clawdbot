@@ -6,16 +6,19 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // Hub manages gateway registrations and client-gateway pairings.
 type Hub struct {
 	secret string
 
-	mu       sync.RWMutex
-	gateways map[string]*Gateway        // gatewayId -> Gateway
-	codes    map[string]*PendingCode     // connectCode -> PendingCode
-	clients  map[string]*ClientSession   // clientKey -> ClientSession
+	mu             sync.RWMutex
+	gateways       map[string]*Gateway        // gatewayId -> Gateway
+	codes          map[string]*PendingCode     // connectCode -> PendingCode
+	clients        map[string]*ClientSession   // clientKey -> ClientSession
+	pendingTunnels map[string]chan *websocket.Conn // sessionId -> channel waiting for gateway tunnel WS
 
 	done chan struct{}
 	wg   sync.WaitGroup
@@ -43,11 +46,12 @@ type ClientSession struct {
 
 func NewHub(secret string) *Hub {
 	h := &Hub{
-		secret:   secret,
-		gateways: make(map[string]*Gateway),
-		codes:    make(map[string]*PendingCode),
-		clients:  make(map[string]*ClientSession),
-		done:     make(chan struct{}),
+		secret:         secret,
+		gateways:       make(map[string]*Gateway),
+		codes:          make(map[string]*PendingCode),
+		clients:        make(map[string]*ClientSession),
+		pendingTunnels: make(map[string]chan *websocket.Conn),
+		done:           make(chan struct{}),
 	}
 	h.wg.Add(1)
 	go h.cleanupLoop()

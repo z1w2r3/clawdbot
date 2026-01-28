@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -45,30 +46,21 @@ func (h *Hub) HandleGatewayRegister(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
-	// read loop: forward data from gateway to targeted client(s)
+	// read loop: only control messages (tunnels handle data forwarding)
 	for {
 		_, raw, err := ws.readMessage()
 		if err != nil {
 			log.Printf("gateway read error (gw=%s): %v", gw.ID, err)
 			break
 		}
-
-		frame, err := parseRelayFrame(raw)
-		if err != nil {
-			// not a relay frame — try as control message, else broadcast
-			h.handleGatewayControl(gw.ID, raw)
-			continue
-		}
-
-		// targeted forward: frame.From should be "client:<deviceToken>" indicating target
-		// But from gateway side, frame.From indicates the target client
-		h.forwardToClient(frame.From, gw.ID, frame.Data)
+		h.handleGatewayControl(gw.ID, raw)
 	}
 
 	h.unregisterGateway(gw.ID)
 }
 
 // HandleClientConnect handles WebSocket connections from clients using a connect code.
+// It pairs the client, then requests a tunnel from the gateway and bridges the two WSs.
 func (h *Hub) HandleClientConnect(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -95,7 +87,18 @@ func (h *Hub) HandleClientConnect(w http.ResponseWriter, r *http.Request) {
 		"deviceToken": cs.DeviceToken,
 	})
 
-	h.runClientLoop(cs)
+	// Request a tunnel from the gateway and bridge the client WS with it
+	tunnelConn, err := h.requestTunnel(gwID)
+	if err != nil {
+		log.Printf("tunnel request failed for client connect (gw=%s): %v", gwID, err)
+		sendControlMessage(ws, "error", map[string]string{"error": "tunnel failed"})
+		ws.close()
+		return
+	}
+
+	// Bridge blocks until one side disconnects
+	bridgeWebSockets(ws.conn, tunnelConn)
+	h.removeClient(cs.DeviceToken, cs.GatewayID)
 }
 
 // HandleClientReconnect handles WebSocket reconnections using gatewayId + deviceToken.
@@ -121,90 +124,52 @@ func (h *Hub) HandleClientReconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendControlMessage(ws, "reconnected", map[string]string{
-		"gatewayId": gwID,
-	})
-
-	h.runClientLoop(cs)
-}
-
-func (h *Hub) runClientLoop(cs *ClientSession) {
-	done := make(chan struct{})
-	defer close(done)
-	go startPinger(cs.Conn, done)
-
-	cs.Conn.conn.SetReadLimit(1 << 20) // 1 MiB max message size
-	cs.Conn.setReadDeadline(timeNow().Add(pongWait))
-	cs.Conn.setPongHandler(func(string) error {
-		cs.Conn.setReadDeadline(timeNow().Add(pongWait))
-		return nil
-	})
-
-	for {
-		_, raw, err := cs.Conn.readMessage()
-		if err != nil {
-			log.Printf("client read error (device=%s): %v", cs.DeviceToken, err)
-			break
-		}
-		// forward to gateway
-		h.forwardToGateway(cs.GatewayID, cs.DeviceToken, raw)
+	tunnelConn, err := h.requestTunnel(gwID)
+	if err != nil {
+		log.Printf("tunnel request failed for client reconnect (gw=%s): %v", gwID, err)
+		sendControlMessage(ws, "error", map[string]string{"error": "tunnel failed"})
+		ws.close()
+		return
 	}
 
+	bridgeWebSockets(ws.conn, tunnelConn)
 	h.removeClient(cs.DeviceToken, cs.GatewayID)
 }
 
-// forwardToGateway sends a client message to the gateway via relay frame.
-func (h *Hub) forwardToGateway(gwID, deviceToken string, data []byte) {
-	h.mu.RLock()
-	gw, ok := h.gateways[gwID]
-	h.mu.RUnlock()
-	if !ok {
-		return
-	}
-	if err := sendRelayFrame(gw.Conn, "client:"+deviceToken, data); err != nil {
-		log.Printf("forward to gateway failed (gw=%s): %v", gwID, err)
-	}
-}
+// requestTunnel sends a tunnel_request to the gateway's control channel and waits
+// for the gateway to connect back on /gateway/tunnel with the matching session ID.
+func (h *Hub) requestTunnel(gwID string) (*websocket.Conn, error) {
+	sessionID := generateID(16)
+	ch := make(chan *websocket.Conn, 1)
 
-// forwardToClient sends a gateway message to a specific client.
-func (h *Hub) forwardToClient(target, gwID string, data []byte) {
-	// target format: "client:<deviceToken>"
-	if len(target) <= 7 {
-		return
-	}
-	deviceToken := target[7:]
-	key := clientKey(deviceToken, gwID)
-
-	h.mu.RLock()
-	cs, ok := h.clients[key]
-	h.mu.RUnlock()
-	if !ok {
-		return
-	}
-	if err := cs.Conn.writeMessage(websocket.TextMessage, data); err != nil {
-		log.Printf("forward to client failed (device=%s): %v", deviceToken, err)
-	}
-}
-
-// broadcastToClients sends raw data to all clients of a gateway.
-func (h *Hub) broadcastToClients(gwID string, data []byte) {
-	h.mu.RLock()
+	h.mu.Lock()
 	gw, ok := h.gateways[gwID]
 	if !ok {
-		h.mu.RUnlock()
-		return
+		h.mu.Unlock()
+		return nil, errGatewayGone
 	}
-	// copy client list to avoid holding lock during writes
-	clients := make([]*ClientSession, 0, len(gw.clients))
-	for _, cs := range gw.clients {
-		clients = append(clients, cs)
-	}
-	h.mu.RUnlock()
+	h.pendingTunnels[sessionID] = ch
+	h.mu.Unlock()
 
-	for _, cs := range clients {
-		if err := cs.Conn.writeMessage(websocket.TextMessage, data); err != nil {
-			log.Printf("broadcast to client failed (device=%s): %v", cs.DeviceToken, err)
-		}
+	defer func() {
+		h.mu.Lock()
+		delete(h.pendingTunnels, sessionID)
+		h.mu.Unlock()
+	}()
+
+	// Send tunnel_request on control channel
+	if err := sendControlMessage(gw.Conn, "tunnel_request", map[string]string{
+		"sessionId": sessionID,
+	}); err != nil {
+		return nil, err
+	}
+
+	// Wait for gateway to establish tunnel (timeout 15s)
+	select {
+	case tunnelConn := <-ch:
+		return tunnelConn, nil
+	case <-time.After(15 * time.Second):
+		return nil, errors.New("tunnel request timed out")
 	}
 }
 
@@ -236,6 +201,68 @@ func (h *Hub) renewConnectCode(gwID string) (string, error) {
 
 // timeNow is a variable for testing.
 var timeNow = func() time.Time { return time.Now() }
+
+// HandleGatewayTunnel handles a tunnel WebSocket from the gateway for a specific session.
+// The gateway connects here after receiving a tunnel_request on the control channel.
+// Once connected, this WS is bridged 1:1 with the waiting client WS.
+func (h *Hub) HandleGatewayTunnel(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		http.Error(w, "missing session parameter", http.StatusBadRequest)
+		return
+	}
+
+	h.mu.RLock()
+	ch, ok := h.pendingTunnels[sessionID]
+	h.mu.RUnlock()
+	if !ok {
+		http.Error(w, "unknown or expired session", http.StatusNotFound)
+		return
+	}
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("tunnel upgrade failed: %v", err)
+		return
+	}
+
+	// deliver the tunnel WS to the waiting client handler
+	select {
+	case ch <- conn:
+		log.Printf("tunnel established: session=%s", sessionID)
+	default:
+		// channel already fulfilled or closed
+		conn.Close()
+	}
+}
+
+// bridgeWebSockets transparently bridges two WebSocket connections.
+// All messages from ws1 are forwarded to ws2 and vice versa.
+// When either side closes, the other is closed too.
+func bridgeWebSockets(ws1, ws2 *websocket.Conn) {
+	done := make(chan struct{}, 2)
+
+	copy := func(dst, src *websocket.Conn) {
+		defer func() { done <- struct{}{} }()
+		for {
+			msgType, data, err := src.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := dst.WriteMessage(msgType, data); err != nil {
+				return
+			}
+		}
+	}
+
+	go copy(ws2, ws1)
+	go copy(ws1, ws2)
+
+	// wait for either direction to finish
+	<-done
+	ws1.Close()
+	ws2.Close()
+}
 
 // handleGatewayControl processes control messages from gateway (non-relay-frame).
 func (h *Hub) handleGatewayControl(gwID string, raw []byte) {
