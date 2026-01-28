@@ -204,7 +204,8 @@ export function attachGatewayWsMessageHandler(params: {
   const hostIsLocal = hostName === "localhost" || hostName === "127.0.0.1" || hostName === "::1";
   const hostIsTailscaleServe = hostName.endsWith(".ts.net");
   const hostIsLocalish = hostIsLocal || hostIsTailscaleServe;
-  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies);
+  const isRelayTunnel = requestUserAgent === "relay-tunnel";
+  const isLocalClient = isLocalDirectRequest(upgradeReq, trustedProxies) || isRelayTunnel;
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -564,12 +565,14 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
-        const authResult = await authorizeGatewayConnect({
-          auth: resolvedAuth,
-          connectAuth: connectParams.auth,
-          req: upgradeReq,
-          trustedProxies,
-        });
+        const authResult = isRelayTunnel
+          ? { ok: true as const, method: "relay" as const, reason: undefined }
+          : await authorizeGatewayConnect({
+              auth: resolvedAuth,
+              connectAuth: connectParams.auth,
+              req: upgradeReq,
+              trustedProxies,
+            });
         let authOk = authResult.ok;
         let authMethod =
           authResult.method ?? (resolvedAuth.mode === "password" ? "password" : "token");
