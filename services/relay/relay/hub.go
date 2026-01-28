@@ -16,6 +16,9 @@ type Hub struct {
 	gateways map[string]*Gateway        // gatewayId -> Gateway
 	codes    map[string]*PendingCode     // connectCode -> PendingCode
 	clients  map[string]*ClientSession   // clientKey -> ClientSession
+
+	done chan struct{}
+	wg   sync.WaitGroup
 }
 
 type Gateway struct {
@@ -44,12 +47,17 @@ func NewHub(secret string) *Hub {
 		gateways: make(map[string]*Gateway),
 		codes:    make(map[string]*PendingCode),
 		clients:  make(map[string]*ClientSession),
+		done:     make(chan struct{}),
 	}
+	h.wg.Add(1)
 	go h.cleanupLoop()
 	return h
 }
 
 func (h *Hub) Close() {
+	close(h.done)
+	h.wg.Wait()
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, gw := range h.gateways {
@@ -106,7 +114,7 @@ func (h *Hub) registerGateway(conn *wsConn, token string) (*Gateway, string, err
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 	}
 
-	log.Printf("gateway registered: id=%s code=%s", gwID, code)
+	log.Printf("gateway registered: id=%s", gwID)
 	return gw, code, nil
 }
 
@@ -210,17 +218,23 @@ func (h *Hub) removeClient(deviceToken, gwID string) {
 }
 
 func (h *Hub) cleanupLoop() {
+	defer h.wg.Done()
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		h.mu.Lock()
-		now := time.Now()
-		for code, pc := range h.codes {
-			if now.After(pc.ExpiresAt) {
-				delete(h.codes, code)
+	for {
+		select {
+		case <-h.done:
+			return
+		case <-ticker.C:
+			h.mu.Lock()
+			now := time.Now()
+			for code, pc := range h.codes {
+				if now.After(pc.ExpiresAt) {
+					delete(h.codes, code)
+				}
 			}
+			h.mu.Unlock()
 		}
-		h.mu.Unlock()
 	}
 }
 

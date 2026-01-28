@@ -198,6 +198,8 @@ export async function startGatewayRelayUplink(params: {
 
   function cleanupRelayClients() {
     for (const [deviceToken, client] of relayClients) {
+      // Mark virtual socket as closed so gateway code knows it's gone
+      (client.socket as unknown as VirtualRelaySocket).close();
       clients.delete(client);
       params.onClientDisconnected?.(client);
       log.info(`relay: client disconnected (device=${deviceToken})`);

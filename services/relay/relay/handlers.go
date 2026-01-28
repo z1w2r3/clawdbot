@@ -38,6 +38,7 @@ func (h *Hub) HandleGatewayRegister(w http.ResponseWriter, r *http.Request) {
 	defer close(done)
 	go startPinger(ws, done)
 
+	ws.conn.SetReadLimit(1 << 20) // 1 MiB max message size
 	ws.conn.SetReadDeadline(timeNow().Add(pongWait))
 	ws.setPongHandler(func(string) error {
 		ws.setReadDeadline(timeNow().Add(pongWait))
@@ -54,8 +55,8 @@ func (h *Hub) HandleGatewayRegister(w http.ResponseWriter, r *http.Request) {
 
 		frame, err := parseRelayFrame(raw)
 		if err != nil {
-			// not a relay frame, treat as broadcast to all clients
-			h.broadcastToClients(gw.ID, raw)
+			// not a relay frame — try as control message, else broadcast
+			h.handleGatewayControl(gw.ID, raw)
 			continue
 		}
 
@@ -132,6 +133,7 @@ func (h *Hub) runClientLoop(cs *ClientSession) {
 	defer close(done)
 	go startPinger(cs.Conn, done)
 
+	cs.Conn.conn.SetReadLimit(1 << 20) // 1 MiB max message size
 	cs.Conn.setReadDeadline(timeNow().Add(pongWait))
 	cs.Conn.setPongHandler(func(string) error {
 		cs.Conn.setReadDeadline(timeNow().Add(pongWait))

@@ -74,8 +74,8 @@ func sendControlMessage(conn *wsConn, msgType string, payload interface{}) error
 // relayFrame wraps a client/gateway data message for relay forwarding.
 // The relay prepends a thin envelope so the other side knows the source.
 type relayFrame struct {
-	From string `json:"from"` // "client:<deviceToken>" or "gateway"
-	Data []byte `json:"data"`
+	From string          `json:"from"` // "client:<deviceToken>" or "gateway"
+	Data json.RawMessage `json:"data"`
 }
 
 func sendRelayFrame(conn *wsConn, from string, data []byte) error {
