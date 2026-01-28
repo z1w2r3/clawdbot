@@ -725,9 +725,13 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
+        logGateway.info(`relay-debug: post-pairing, about to ensureDeviceToken conn=${connId}`);
         const deviceToken = device
           ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
           : null;
+        logGateway.info(
+          `relay-debug: post-ensureDeviceToken conn=${connId} hasToken=${!!deviceToken}`,
+        );
 
         if (role === "node") {
           const cfg = loadConfig();
@@ -880,7 +884,9 @@ export function attachGatewayWsMessageHandler(params: {
           stateVersion: snapshot.stateVersion.presence,
         });
 
+        logGateway.info(`relay-debug: sending hello-ok conn=${connId}`);
         send({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        logGateway.info(`relay-debug: hello-ok sent conn=${connId}`);
         void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
