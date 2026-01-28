@@ -3,7 +3,10 @@ package relay
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,13 +15,16 @@ import (
 
 // Hub manages gateway registrations and client-gateway pairings.
 type Hub struct {
-	secret string
+	secret   string
+	dataDir  string // directory for persistent state (empty = no persistence)
 
 	mu             sync.RWMutex
 	gateways       map[string]*Gateway        // gatewayId -> Gateway
 	codes          map[string]*PendingCode     // connectCode -> PendingCode
 	clients        map[string]*ClientSession   // clientKey -> ClientSession
 	pendingTunnels map[string]chan *websocket.Conn // sessionId -> channel waiting for gateway tunnel WS
+	// persistent pairings: deviceToken -> gatewayId (survives relay/gateway restarts)
+	pairings       map[string]string
 
 	done chan struct{}
 	wg   sync.WaitGroup
@@ -44,18 +50,55 @@ type ClientSession struct {
 	Conn        *wsConn
 }
 
-func NewHub(secret string) *Hub {
+func NewHub(secret, dataDir string) *Hub {
 	h := &Hub{
 		secret:         secret,
+		dataDir:        dataDir,
 		gateways:       make(map[string]*Gateway),
 		codes:          make(map[string]*PendingCode),
 		clients:        make(map[string]*ClientSession),
 		pendingTunnels: make(map[string]chan *websocket.Conn),
+		pairings:       make(map[string]string),
 		done:           make(chan struct{}),
 	}
+	h.loadPairings()
 	h.wg.Add(1)
 	go h.cleanupLoop()
 	return h
+}
+
+// pairings persistence
+func (h *Hub) pairingsPath() string {
+	if h.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(h.dataDir, "pairings.json")
+}
+
+func (h *Hub) loadPairings() {
+	path := h.pairingsPath()
+	if path == "" {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var m map[string]string
+	if json.Unmarshal(data, &m) == nil {
+		h.pairings = m
+		log.Printf("loaded %d pairings from disk", len(m))
+	}
+}
+
+func (h *Hub) savePairings() {
+	path := h.pairingsPath()
+	if path == "" {
+		return
+	}
+	os.MkdirAll(filepath.Dir(path), 0755)
+	data, _ := json.Marshal(h.pairings)
+	os.WriteFile(path, data, 0644)
 }
 
 func (h *Hub) Close() {
@@ -95,15 +138,27 @@ func generateConnectCode() string {
 	return string(code)
 }
 
-func (h *Hub) registerGateway(conn *wsConn, token string) (*Gateway, string, error) {
+func (h *Hub) registerGateway(conn *wsConn, token, requestedID string) (*Gateway, string, error) {
 	if token != h.secret {
 		return nil, "", errUnauthorized
 	}
-	gwID := generateID(16)
-	code := generateConnectCode()
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// If gateway requests a specific ID and it's not currently online, reuse it
+	gwID := ""
+	if requestedID != "" {
+		if _, online := h.gateways[requestedID]; !online {
+			gwID = requestedID
+			log.Printf("gateway resuming id=%s", gwID)
+		}
+	}
+	if gwID == "" {
+		gwID = generateID(16)
+	}
+
+	code := generateConnectCode()
 
 	gw := &Gateway{
 		ID:        gwID,
@@ -175,6 +230,10 @@ func (h *Hub) pairClient(conn *wsConn, code string) (*ClientSession, string, err
 	h.clients[key] = cs
 	gw.clients[key] = cs
 
+	// persist pairing
+	h.pairings[deviceToken] = pc.GatewayID
+	h.savePairings()
+
 	// code is single-use
 	delete(h.codes, code)
 
@@ -185,6 +244,15 @@ func (h *Hub) pairClient(conn *wsConn, code string) (*ClientSession, string, err
 func (h *Hub) reconnectClient(conn *wsConn, gwID, deviceToken string) (*ClientSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Verify pairing exists (either in-memory or persisted)
+	if pairedGW, ok := h.pairings[deviceToken]; ok {
+		// If the client was paired to a different gateway, reject
+		if pairedGW != gwID {
+			return nil, errGatewayGone
+		}
+	}
+	// Note: allow reconnection even without a persisted pairing (backwards compat)
 
 	gw, ok := h.gateways[gwID]
 	if !ok {

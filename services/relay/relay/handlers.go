@@ -22,7 +22,8 @@ func (h *Hub) HandleGatewayRegister(w http.ResponseWriter, r *http.Request) {
 	ws := newWsConn(conn)
 
 	token := r.URL.Query().Get("token")
-	gw, code, err := h.registerGateway(ws, token)
+	requestedID := r.URL.Query().Get("gwid")
+	gw, code, err := h.registerGateway(ws, token, requestedID)
 	if err != nil {
 		sendControlMessage(ws, "error", map[string]string{"error": err.Error()})
 		ws.close()

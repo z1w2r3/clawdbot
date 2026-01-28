@@ -146,7 +146,7 @@ public actor GatewayChannelActor {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private let connectTimeoutSeconds: Double = 6
-    private let connectChallengeTimeoutSeconds: Double = 0.75
+    private let connectChallengeTimeoutSeconds: Double = 5.0
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000

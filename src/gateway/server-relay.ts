@@ -1,5 +1,7 @@
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
+import { join } from "node:path";
 import WebSocket from "ws";
 
 type RelayLogger = {
@@ -33,6 +35,29 @@ export type RelayUplinkResult = {
  * The tunnel WS is a real ws.WebSocket injected into the gateway's WSS
  * via `wss.emit("connection", tunnelWs, fakeReq)` — no virtual socket needed.
  */
+/** Load previously saved relay gatewayId from ~/.clawdbot/relay-state.json */
+function loadSavedGatewayId(): string | null {
+  try {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    const data = JSON.parse(readFileSync(join(home, ".clawdbot", "relay-state.json"), "utf8"));
+    return typeof data.gatewayId === "string" ? data.gatewayId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Save relay gatewayId to ~/.clawdbot/relay-state.json */
+function saveGatewayId(id: string): void {
+  try {
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+    const dir = join(home, ".clawdbot");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "relay-state.json"), JSON.stringify({ gatewayId: id }), "utf8");
+  } catch {
+    // best-effort
+  }
+}
+
 export async function startGatewayRelayUplink(params: {
   relayUrl: string;
   relayToken: string;
@@ -48,6 +73,7 @@ export async function startGatewayRelayUplink(params: {
   log: RelayLogger;
 }): Promise<RelayUplinkResult> {
   const { relayUrl, relayToken, log } = params;
+  const savedGatewayId = loadSavedGatewayId();
 
   let ws: WebSocket | null = null;
   let stopped = false;
@@ -61,6 +87,7 @@ export async function startGatewayRelayUplink(params: {
       case "registered":
         gatewayId = ctrl.payload?.gatewayId ?? null;
         connectCode = ctrl.payload?.connectCode ?? null;
+        if (gatewayId) saveGatewayId(gatewayId);
         log.info(`relay: registered (id=${gatewayId}, code=${connectCode})`);
         break;
       case "code_renewed":
@@ -137,8 +164,11 @@ export async function startGatewayRelayUplink(params: {
   function connect() {
     if (stopped) return;
 
-    const url = `${relayUrl}/gateway/register?token=${encodeURIComponent(relayToken)}`;
-    log.info(`relay: connecting to ${relayUrl}...`);
+    const gwIdParam = savedGatewayId ? `&gwid=${encodeURIComponent(savedGatewayId)}` : "";
+    const url = `${relayUrl}/gateway/register?token=${encodeURIComponent(relayToken)}${gwIdParam}`;
+    log.info(
+      `relay: connecting to ${relayUrl}...${savedGatewayId ? ` (resuming id=${savedGatewayId})` : ""}`,
+    );
 
     try {
       ws = new WebSocket(url);

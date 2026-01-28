@@ -22,7 +22,11 @@ func main() {
 		log.Fatal("RELAY_SECRET is required")
 	}
 
-	hub := relay.NewHub(secret)
+	dataDir := os.Getenv("RELAY_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/opt/relay/data"
+	}
+	hub := relay.NewHub(secret, dataDir)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/gateway/register", hub.HandleGatewayRegister)
