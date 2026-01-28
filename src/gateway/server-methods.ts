@@ -39,6 +39,8 @@ const NODE_ROLE_METHODS = new Set([
   "chat.history",
   "chat.send",
   "chat.abort",
+  "config.get",
+  "voicewake.get",
 ]);
 const PAIRING_METHODS = new Set([
   "node.pair.request",
