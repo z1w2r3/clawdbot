@@ -803,7 +803,7 @@ export function attachGatewayWsMessageHandler(params: {
           },
           features: { methods: gatewayMethods, events },
           snapshot,
-          canvasHostUrl,
+          canvasHostUrl: isRelayTunnel ? undefined : canvasHostUrl,
           auth: deviceToken
             ? {
                 deviceToken: deviceToken.token,
