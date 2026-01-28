@@ -503,6 +503,7 @@ export async function startGatewayServer(
         relayUrl: relayConfig.url,
         relayToken: relayConfig.token,
         clients,
+        wss,
         onClientMessage: (_client, _data) => {
           // Messages are handled via the virtual socket's ws message events
         },
