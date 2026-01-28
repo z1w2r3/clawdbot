@@ -106,6 +106,9 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role === "node") {
+    // Allow node role to use read + write methods (for relay chat clients),
+    // but block admin/pairing methods below.
+    if (READ_METHODS.has(method) || WRITE_METHODS.has(method)) return null;
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
   if (role !== "operator") {
