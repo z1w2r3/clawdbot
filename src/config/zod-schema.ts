@@ -340,6 +340,14 @@ export const ClawdbotSchema = z
           })
           .strict()
           .optional(),
+        relay: z
+          .object({
+            enabled: z.boolean().optional(),
+            url: z.string().optional(),
+            token: z.string().optional(),
+          })
+          .strict()
+          .optional(),
         remote: z
           .object({
             url: z.string().optional(),

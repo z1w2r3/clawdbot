@@ -73,6 +73,11 @@ public struct GatewayConnectOptions: Sendable {
     public var clientMode: String
     public var clientDisplayName: String?
 
+    // Relay cloud bridge fields (nil when connecting directly)
+    public var relayUrl: String?
+    public var relayGatewayId: String?
+    public var relayDeviceToken: String?
+
     public init(
         role: String,
         scopes: [String],
@@ -81,7 +86,10 @@ public struct GatewayConnectOptions: Sendable {
         permissions: [String: Bool],
         clientId: String,
         clientMode: String,
-        clientDisplayName: String?)
+        clientDisplayName: String?,
+        relayUrl: String? = nil,
+        relayGatewayId: String? = nil,
+        relayDeviceToken: String? = nil)
     {
         self.role = role
         self.scopes = scopes
@@ -91,6 +99,16 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
+        self.relayUrl = relayUrl
+        self.relayGatewayId = relayGatewayId
+        self.relayDeviceToken = relayDeviceToken
+    }
+}
+
+/// Builds a relay reconnect URL from relay parameters.
+public enum GatewayRelayURLBuilder {
+    public static func reconnectURL(relayUrl: String, gatewayId: String, deviceToken: String) -> URL? {
+        URL(string: "\(relayUrl)/client/reconnect?gw=\(gatewayId)&token=\(deviceToken)")
     }
 }
 

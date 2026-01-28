@@ -102,6 +102,45 @@ enum GatewaySettingsStore {
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }
 
+    // MARK: - Relay settings
+
+    private static let relayUrlDefaultsKey = "gateway.relay.url"
+    private static let relayGatewayIdAccount = "relay-gatewayId"
+    private static let relayDeviceTokenAccount = "relay-deviceToken"
+
+    static func loadRelayUrl() -> String? {
+        UserDefaults.standard.string(forKey: self.relayUrlDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func saveRelayUrl(_ url: String) {
+        UserDefaults.standard.set(url, forKey: self.relayUrlDefaultsKey)
+    }
+
+    static func loadRelayGatewayId() -> String? {
+        KeychainStore.loadString(service: self.gatewayService, account: self.relayGatewayIdAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func saveRelayGatewayId(_ gatewayId: String) {
+        _ = KeychainStore.saveString(gatewayId, service: self.gatewayService, account: self.relayGatewayIdAccount)
+    }
+
+    static func loadRelayDeviceToken() -> String? {
+        KeychainStore.loadString(service: self.gatewayService, account: self.relayDeviceTokenAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func saveRelayDeviceToken(_ token: String) {
+        _ = KeychainStore.saveString(token, service: self.gatewayService, account: self.relayDeviceTokenAccount)
+    }
+
+    static func clearRelayCreds() {
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.relayGatewayIdAccount)
+        _ = KeychainStore.delete(service: self.gatewayService, account: self.relayDeviceTokenAccount)
+        UserDefaults.standard.removeObject(forKey: self.relayUrlDefaultsKey)
+    }
+
     private static func gatewayTokenAccount(instanceId: String) -> String {
         "gateway-token.\(instanceId)"
     }

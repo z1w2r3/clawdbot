@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { gatewayStatusCommand } from "../../commands/gateway-status.js";
 import { formatHealthChannelLines, type HealthSummary } from "../../commands/health.js";
+import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { discoverGatewayBeacons } from "../../infra/bonjour-discovery.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import { WIDE_AREA_DISCOVERY_DOMAIN } from "../../infra/widearea-dns.js";
@@ -328,5 +329,85 @@ export function registerGatewayCli(program: Command) {
           }
         }
       }, "gateway discover failed");
+    });
+
+  // --- relay subcommands ---
+  const relay = gateway.command("relay").description("Manage relay cloud bridge");
+
+  relay
+    .command("enable")
+    .description("Enable relay uplink and show connect code")
+    .option("--url <url>", "Relay server URL", "wss://relay.clawd.bot")
+    .option("--token <token>", "Relay registration token")
+    .action(async (opts) => {
+      await runGatewayCommand(async () => {
+        const cfg = loadConfig();
+        const token = opts.token ?? cfg.gateway?.relay?.token;
+        if (!token) {
+          defaultRuntime.error(
+            "Relay token is required. Use --token or set gateway.relay.token in config.",
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        cfg.gateway = {
+          ...cfg.gateway,
+          relay: {
+            enabled: true,
+            url: opts.url,
+            token,
+          },
+        };
+        await writeConfigFile(cfg);
+        const rich = isRich();
+        defaultRuntime.log(colorize(rich, theme.success, "Relay enabled."));
+        defaultRuntime.log(`${colorize(rich, theme.muted, "URL:")} ${opts.url}`);
+        defaultRuntime.log(
+          colorize(rich, theme.muted, "Restart the gateway to activate the relay uplink."),
+        );
+      }, "relay enable failed");
+    });
+
+  relay
+    .command("disable")
+    .description("Disable relay uplink")
+    .action(async () => {
+      await runGatewayCommand(async () => {
+        const cfg = loadConfig();
+        if (cfg.gateway?.relay) {
+          cfg.gateway.relay.enabled = false;
+        }
+        await writeConfigFile(cfg);
+        const rich = isRich();
+        defaultRuntime.log(colorize(rich, theme.success, "Relay disabled."));
+        defaultRuntime.log(
+          colorize(rich, theme.muted, "Restart the gateway to disconnect the relay uplink."),
+        );
+      }, "relay disable failed");
+    });
+
+  relay
+    .command("status")
+    .description("Show relay configuration status")
+    .action(async () => {
+      await runGatewayCommand(async () => {
+        const cfg = loadConfig();
+        const relayCfg = cfg.gateway?.relay;
+        const rich = isRich();
+        defaultRuntime.log(colorize(rich, theme.heading, "Relay Status"));
+        if (!relayCfg?.enabled) {
+          defaultRuntime.log(
+            `${colorize(rich, theme.muted, "Enabled:")} ${colorize(rich, theme.warn, "no")}`,
+          );
+          return;
+        }
+        defaultRuntime.log(
+          `${colorize(rich, theme.muted, "Enabled:")} ${colorize(rich, theme.success, "yes")}`,
+        );
+        defaultRuntime.log(`${colorize(rich, theme.muted, "URL:")} ${relayCfg.url ?? "(not set)"}`);
+        defaultRuntime.log(
+          `${colorize(rich, theme.muted, "Token:")} ${relayCfg.token ? "***" : "(not set)"}`,
+        );
+      });
     });
 }

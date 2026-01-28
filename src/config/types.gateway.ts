@@ -205,6 +205,15 @@ export type GatewayNodesConfig = {
   denyCommands?: string[];
 };
 
+export type GatewayRelayConfig = {
+  /** Enable relay uplink to a cloud relay server. */
+  enabled?: boolean;
+  /** Relay server URL (e.g. wss://relay.clawd.bot). */
+  url?: string;
+  /** Token for authenticating with the relay server. */
+  token?: string;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -228,6 +237,7 @@ export type GatewayConfig = {
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
+  relay?: GatewayRelayConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;

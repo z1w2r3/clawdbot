@@ -66,6 +66,7 @@ import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { logGatewayStartup } from "./server-startup-log.js";
+import { startGatewayRelayUplink } from "./server-relay.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
@@ -79,6 +80,7 @@ const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
 const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
+const logRelay = log.child("relay");
 const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
 const logHealth = log.child("health");
@@ -492,6 +494,29 @@ export async function startGatewayServer(
     logTailscale,
   });
 
+  // --- Relay uplink ---
+  const relayConfig = cfgAtStart.gateway?.relay;
+  let relayCleanup: (() => Promise<void>) | null = null;
+  if (relayConfig?.enabled && relayConfig.url && relayConfig.token) {
+    try {
+      const relayResult = await startGatewayRelayUplink({
+        relayUrl: relayConfig.url,
+        relayToken: relayConfig.token,
+        clients,
+        onClientMessage: (_client, _data) => {
+          // Messages are handled via the virtual socket's ws message events
+        },
+        log: logRelay,
+      });
+      relayCleanup = relayResult.stop;
+      if (relayResult.connectCode) {
+        logRelay.info(`relay connect code: ${relayResult.connectCode}`);
+      }
+    } catch (err) {
+      logRelay.warn(`relay uplink failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   ({ browserControl, pluginServices } = await startGatewaySidecars({
     cfg: cfgAtStart,
@@ -547,6 +572,7 @@ export async function startGatewayServer(
   const close = createGatewayCloseHandler({
     bonjourStop,
     tailscaleCleanup,
+    relayCleanup,
     canvasHost,
     canvasHostServer,
     stopChannel,
